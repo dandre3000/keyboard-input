@@ -27,7 +27,8 @@
     "import": "./build/index.js"
   },
   "scripts": {
-    "build": "tsc && bun build --entrypoints ./index.ts --outdir ./build --minify-whitespace --minify-syntax"
+    "build": "tsc && bun build --entrypoints ./index.ts --outdir ./build --minify-whitespace --minify-syntax",
+    "prepack": "bun run build"
   },
   "devDependencies": {
     "typescript": "^5.9.3"

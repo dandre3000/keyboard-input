@@ -1,337 +1,139 @@
-type InputEventId = PointerEvent['pointerId'] | KeyboardEvent['code']
+import DereferenceRegistry from "@dandre3000/dereference-registry"
 
-export interface PointerState {
-    button1: boolean
-    button2: boolean
-    button3: boolean
-    button4: boolean
-    button5: boolean
-    screenX: number
-    screenY: number
-    clientX: number
-    clientY: number
-    pageX: number
-    pageY: number
-    movementX: number
-    movementY: number
-}
+type KeyCode = KeyboardEvent['code'] | KeyboardEvent['key']
+type KeyboardEventTypes =
+    'keydown' |
+    'keypress' |
+    'keyup'
 
-type PromiseExecutor = ConstructorParameters<PromiseConstructor>[0]
+type PromiseExecutor = ConstructorParameters<typeof Promise<KeyboardEvent>>[0]
 type Resolve = Parameters<PromiseExecutor>[0]
 type Reject = Parameters<PromiseExecutor>[1]
 
-interface PromiseData extends EventListenerObject {
-    id: InputEventId
-    eventMap: Map<InputEventId, Set<PromiseData>>
-    signal?: AbortSignal
-    resolve: Resolve
-    reject: Reject
+interface KeyboardObserverData extends EventListenerObject {
+    symbol: symbol
+    eventTargetRef: WeakRef<EventTarget>
+    buttons: Set<KeyCode>
+    keydown: Set<Resolve>
+    keypress: Set<Resolve>
+    keyup: Set<Resolve>
+    rejectSet: Set<Reject>
+    resolveToRejectMap: Map<Resolve, Reject>
 }
 
-const eventTypePromiseDataMapReference: { [key: string]: PromiseData['eventMap'] } = {
-    pointerenter: undefined,
-    pointerdown: undefined,
-    pointermove: undefined,
-    pointerup: undefined,
-    pointerleave: undefined,
-    click: undefined,
-    keydown: undefined,
-    keypress: undefined,
-    keyup: undefined
+const KeyboardObserverSymbol = Symbol()
+
+const keyboardEventListener = function (this: KeyboardObserverData, event: KeyboardEvent) {
+    if (event.type === 'keyup') {
+        this.buttons.delete(event.code)
+        this.buttons.delete(event.key)
+    } else {
+        this.buttons.add(event.code)
+        this.buttons.add(event.key)
+    }
+
+    for (const resolve of this[event.type]) {
+        resolve(event)
+
+        this.rejectSet.delete(this.resolveToRejectMap.get(resolve))
+        this.resolveToRejectMap.delete(resolve)
+    }
+
+    this[event.type].clear()
 }
 
-const eventPromiseInit: Omit<Required<PromiseData>, 'resolve' | 'reject' | 'handleEvent' > & { idType: NumberConstructor | StringConstructor } = {
-    id: undefined,
-    idType: undefined,
-    eventMap: undefined,
-    signal: undefined
+const KeyboardObserverCleanup = (data: KeyboardObserverData) => {
+    data.eventTargetRef.deref()?.removeEventListener('keydown', data, true)
+    data.eventTargetRef.deref()?.removeEventListener('keypress', data, true)
+    data.eventTargetRef.deref()?.removeEventListener('keyup', data, true)
+
+    for (const reject of data.rejectSet) {
+        reject('KeyboardObserver instance has been disconnected')
+    }
+
+    data.buttons.clear()
+    data.keydown.clear()
+    data.keypress.clear()
+    data.keyup.clear()
+    data.rejectSet.clear()
 }
 
-const abortListener: PromiseData['handleEvent'] = function (this: PromiseData) {
-    this.reject(this.signal.reason)
-    this.eventMap.delete(this.id)
-}
+let currentEventType: KeyboardEventTypes
+let currentKeyboardObserver: KeyboardObserver
+let currentKeyboardObserverData: KeyboardObserverData
 
 const eventPromiseExecutor: PromiseExecutor = (resolve, reject) => {
-    if (!active) throw new Error('Not active')
+    if (currentKeyboardObserverData?.symbol !== KeyboardObserverSymbol)
+        throw new TypeError(`this (${Object.prototype.toString.call(currentKeyboardObserver)}) is not a KeyboardObserver instance`)
 
-    const { eventMap, signal, idType } = eventPromiseInit
-    let id = idType(eventPromiseInit.id)
+    currentEventType = String(currentEventType) as KeyboardEventTypes
+    if (currentEventType !== 'keydown' && currentEventType !== 'keypress' && currentEventType !== 'keyup')
+        throw new TypeError(`type (${currentEventType}) argument is not a equal to "keydown", "keypress" or "keyup"`)
 
-    if (signal !== undefined && !(signal instanceof AbortSignal))
-        throw new TypeError(`signal (${Object.prototype.toString.call(signal)}) is not an AbortSignal instance.`)
-
-    const promiseData = {
-        id,
-        eventMap,
-        signal,
-        resolve,
-        reject,
-        handleEvent: abortListener
-    }
-
-    signal?.addEventListener('abort', promiseData)
-
-    let promiseDataSet = eventMap.get(id)
-    if (promiseDataSet)
-        promiseDataSet.add(promiseData)
-    else
-        eventMap.set(id, new Set([promiseData]))
-
-    eventPromiseInit.id = undefined
-    eventPromiseInit.eventMap = undefined
-    eventPromiseInit.signal = undefined
+    currentKeyboardObserverData[currentEventType].add(resolve)
+    currentKeyboardObserverData.rejectSet.add(reject)
+    currentKeyboardObserverData.resolveToRejectMap.set(resolve, reject)
 }
 
-const asyncEvent = <T>(eventName: string, idType: NumberConstructor | StringConstructor, id: InputEventId, signal?: AbortSignal) => {
-    eventPromiseInit.id = id
-    eventPromiseInit.idType = idType
-    eventPromiseInit.eventMap = eventTypePromiseDataMapReference[eventName]
-    eventPromiseInit.signal = signal
-    const promise = new Promise(eventPromiseExecutor)
+const KeyboardObserverRegistry = new DereferenceRegistry(KeyboardObserverCleanup, 1000)
 
-    return promise as Promise<T>
-}
+export class KeyboardObserver {
+    #data: KeyboardObserverData
 
-const root = document.documentElement
-const keyboardSet: Set<KeyboardEvent['code']> = new Set
-const pointerStateMap: Map<PointerEvent['pointerId'], PointerState> = new Map
-
-const updateKeyboardState = (event: KeyboardEvent) => {
-    if (event.code === undefined) return
-
-    let button = true
-
-    if (event.type === 'keydown')
-        keyboardSet.add(event.code)
-    else if (event.type === 'keyup') {
-        button = false
-
-        keyboardSet.delete(event.code)
-    }
-
-    return button
-}
-
-const updatePointerState = (event: PointerEvent) => {
-    const {
-        target,
-        type,
-        pointerId,
-        buttons,
-        screenX,
-        screenY,
-        clientX,
-        clientY,
-        pageX,
-        pageY,
-        movementX,
-        movementY
-    } = event
-
-    let pointerState: PointerState
-
-    if (type === 'pointerenter') {
-        pointerStateMap.set(pointerId, pointerState = {
-            button1: (buttons & 1) === 1,
-            button2: (buttons & 2) === 2,
-            button3: (buttons & 4) === 4,
-            button4: (buttons & 8) === 8,
-            button5: (buttons & 16) === 16,
-            screenX: screenX,
-            screenY: screenY,
-            clientX: clientX,
-            clientY: clientY,
-            pageX: pageX,
-            pageY: pageY,
-            movementX: movementX,
-            movementY: movementY
-        })
-    } else {
-        pointerState = pointerStateMap.get(pointerId)
-
-        pointerState.button1 = (buttons & 1) === 1
-        pointerState.button2 = (buttons & 2) === 2
-        pointerState.button3 = (buttons & 4) === 4
-        pointerState.button4 = (buttons & 8) === 8
-        pointerState.button5 = (buttons & 16) === 16
-        pointerState.screenX = screenX
-        pointerState.screenY = screenY
-        pointerState.clientX = clientX
-        pointerState.clientY = clientY
-        pointerState.pageX = pageX
-        pointerState.pageY = pageY
-        pointerState.movementX = movementX
-        pointerState.movementY = movementY
-    }
-
-    if (type === 'pointerleave' && target === root) pointerStateMap.delete(pointerId)
-
-    return pointerState
-}
-
-const eventListener: EventListener = (event: PointerEvent | KeyboardEvent) => {
-    let id: InputEventId
-    let data: PointerState | boolean
-
-    if (event instanceof PointerEvent) {
-        id = event.pointerId
-        data = updatePointerState(event)
-    } else {
-        id = event.code
-        data = updateKeyboardState(event)
-    }
-
-    const promiseDataSet = eventTypePromiseDataMapReference[event.type].get(id)
-
-    if (promiseDataSet) {
-        if (typeof data === 'object') data = { ...data }
-
-        for (const promiseData of promiseDataSet) {
-            promiseData.resolve(data)
-            promiseData.signal?.removeEventListener('abort', promiseData)
+    constructor (eventTarget: EventTarget) {
+        this.#data = {
+            symbol: KeyboardObserverSymbol,
+            eventTargetRef: new WeakRef(eventTarget),
+            buttons: new Set,
+            keydown: new Set,
+            keypress: new Set,
+            keyup: new Set,
+            rejectSet: new Set,
+            resolveToRejectMap: new Map,
+            handleEvent: keyboardEventListener
         }
 
-        eventTypePromiseDataMapReference[event.type].delete(id)
+        eventTarget.addEventListener('keydown', this.#data, true)
+        eventTarget.addEventListener('keypress', this.#data, true)
+        eventTarget.addEventListener('keyup', this.#data, true)
+
+        KeyboardObserverRegistry.register(this, this.#data, this)
+        KeyboardObserverRegistry.start()
     }
-}
 
-let active = false
+    getButtons <T extends KeyCode[]>(...keyCodes: T): T['length'] extends 1 ? boolean : boolean[] {
+        if (this.#data?.symbol !== KeyboardObserverSymbol)
+            throw TypeError(`this (${Object.prototype.toString.call(this)}) is not a KeyboardObserver instance`)
 
-/**
- * Add keyboard and pointer event listeners to the root element and enable exported methods.
- */
-export const activate = () => {
-    if (active) return
+        if (keyCodes.length === 1) return this.#data.buttons.has(String(keyCodes[0])) as any
 
-    const eventNames = [
-        'keydown',
-        'keypress',
-        'keyup',
-        'pointerenter',
-        'pointerdown',
-        'pointermove',
-        'pointerup',
-        'click',
-        'pointerleave'
-    ]
-
-    active = true
-
-    for (let i = 0; i < eventNames.length; i++) {
-        root.addEventListener(eventNames[i], eventListener, true)
-
-        eventTypePromiseDataMapReference[eventNames[i]] = new Map
-    }
-}
-
-/**
- * Remove keyboard and pointer event listeners from the root element, disable exported methods and
- * reject all promises returned by them.
- */
-export const deactivate = () => {
-    if (!active) return
-
-    const eventNames = [
-        'keydown',
-        'keypress',
-        'keyup',
-        'pointerenter',
-        'pointerdown',
-        'pointermove',
-        'pointerup',
-        'click',
-        'pointerleave'
-    ]
-
-    active = false
-    keyboardSet.clear()
-    pointerStateMap.clear()
-
-    for (let i = 0; i < eventNames.length; i++) {
-        root.removeEventListener(eventNames[i], eventListener, true)
-
-        for (const [id, set] of eventTypePromiseDataMapReference[eventNames[i]]) {
-            for (const promiseData of set) {
-                promiseData.reject(new Error('Deactivate'))
-            }
-        }
-
-        eventTypePromiseDataMapReference[eventNames[i]] = undefined
-    }
-}
-
-export const getKeyboardButtons = <T extends KeyboardEvent['code'][]>(...codeArray: T): T['length'] extends 1 ? boolean : boolean[] => {
-    if (!active) throw new Error('Not active')
-
-    if (codeArray.length === 1) {
-        return keyboardSet.has(codeArray[0]) as any
-    } else {
         const buttons: boolean[] = []
 
-        for (let i = 0; i < codeArray.length; i++) {
-            buttons.push(keyboardSet.has(codeArray[i]))
+        for (let i = 0; i < keyCodes.length; i++) {
+            buttons.push(this.#data.buttons.has(String(keyCodes[i])))
         }
 
         return buttons as any
     }
-}
 
-export const getKeyboardState = () => new Set(keyboardSet)
+    getPressedKeyCodes () {
+        if (this.#data?.symbol !== KeyboardObserverSymbol)
+            throw new TypeError(`this (${Object.prototype.toString.call(this)}) is not a KeyboardObserver instance`)
 
-export const getPointerStates = <T extends PointerEvent['pointerId'][]>(...idArray: T): T['length'] extends 1 ? PointerState : PointerState[] => {
-    if (!active) throw new Error('Not active')
+        return new Set(this.#data.buttons)
+    }
 
-    if (idArray.length === 1) {
-        const pointerState = pointerStateMap.get(idArray[0])
+    getNextEvent (type: KeyboardEventTypes) {
+        currentEventType = type
+        currentKeyboardObserver = this
+        currentKeyboardObserverData = this.#data
+        const promise = new Promise(eventPromiseExecutor)
+        currentEventType = undefined
+        currentKeyboardObserver = undefined
+        currentKeyboardObserverData = undefined
 
-        return pointerState ? { ...pointerState } as any : null
-    } else {
-        const states: PointerState[] = []
-
-        for (let i = 0; i < idArray.length; i++) {
-            const pointerState = pointerStateMap.get(idArray[i])
-
-            states.push(pointerState? { ...pointerState } : null)
-        }
-
-        return states as any
+        return promise
     }
 }
 
-export const getPointerStateMap = () => {
-    const copyMap: typeof pointerStateMap = new Map
-
-    for (const [id, state] of pointerStateMap) {
-        copyMap.set(id, { ...state })
-    }
-
-    return copyMap
-}
-
-export const asyncKeydown = (code: KeyboardEvent['code'], signal?: AbortSignal) =>
-    asyncEvent<boolean>('keydown', String, code, signal)
-
-export const asyncKeypress = (code: KeyboardEvent['code'], signal?: AbortSignal) =>
-    asyncEvent<boolean>('keypress', String, code, signal)
-
-export const asyncKeyup = (code: KeyboardEvent['code'], signal?: AbortSignal) =>
-    asyncEvent<boolean>('keyup', String, code, signal)
-
-export const asyncPointerenter = (id: PointerEvent['pointerId'], signal?: AbortSignal) =>
-    asyncEvent<PointerState>('pointerenter', Number, id, signal)
-
-export const asyncPointerdown = (id: PointerEvent['pointerId'], signal?: AbortSignal) =>
-    asyncEvent<PointerState>('pointerdown', Number, id, signal)
-
-export const asyncPointermove = (id: PointerEvent['pointerId'], signal?: AbortSignal) =>
-    asyncEvent<PointerState>('pointermove', Number, id, signal)
-
-export const asyncPointerup = (id: PointerEvent['pointerId'], signal?: AbortSignal) =>
-    asyncEvent<PointerState>('pointerup', Number, id, signal)
-
-export const asyncClick = (id: PointerEvent['pointerId'], signal?: AbortSignal) =>
-    asyncEvent<PointerState>('click', Number, id, signal)
-
-export const asyncPointerleave = (id: PointerEvent['pointerId'], signal?: AbortSignal) =>
-    asyncEvent<PointerState>('pointerleave', Number, id, signal)
+export default KeyboardObserver

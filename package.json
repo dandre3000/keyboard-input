@@ -1,6 +1,6 @@
 {
-  "name": "@dandre3000/async-keyboard-pointer",
-  "version": "0.2.0",
+  "name": "@dandre3000/keyboard-observer",
+  "version": "0.1.0",
   "license": "MIT",
   "author": {
     "name": "DeAundre Payne",
@@ -9,13 +9,11 @@
   },
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/dandre3000/async-keyboard-pointer.git"
+    "url": "git+https://github.com/dandre3000/keyboard-observer.git"
   },
-  "description": "Query keyboard and pointer states. Use keyboard and pointer events asynchronously.",
+  "description": "Query keyboard state and use keyboard events asynchronously.",
   "keywords": [
     "keyboard",
-    "mouse",
-    "pointer",
     "input",
     "browser"
   ],
@@ -32,5 +30,8 @@
   },
   "devDependencies": {
     "typescript": "^5.9.3"
+  },
+  "dependencies": {
+    "@dandre3000/dereference-registry": "^0.2.0"
   }
 }

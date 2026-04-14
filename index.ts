@@ -2,7 +2,7 @@ type KeyCode = KeyboardEvent['code'] | KeyboardEvent['key']
 
 interface KeyboardInputData extends EventListenerObject {
     symbol: symbol
-    eventTarget: EventTarget
+    target: EventTarget
     buttons: Set<KeyCode>
     handleEvent: (this: KeyboardInputData) => void
 }
@@ -22,17 +22,19 @@ export class KeyboardInput {
         }
     }
 
-    constructor (eventTarget: EventTarget) {
+    constructor (target: EventTarget) {
+        if (!(target instanceof EventTarget)) throw new TypeError
+
         this.#data = {
             symbol: KeyboardInput.#symbol,
-            eventTarget,
+            target,
             buttons: new Set,
             handleEvent: KeyboardInput.#listener
         }
 
-        eventTarget.addEventListener('keydown', this.#data, true)
-        eventTarget.addEventListener('keypress', this.#data, true)
-        eventTarget.addEventListener('keyup', this.#data, true)
+        target.addEventListener('keydown', this.#data, true)
+        target.addEventListener('keypress', this.#data, true)
+        target.addEventListener('keyup', this.#data, true)
     }
 
     areButtonsPressed <T extends KeyCode[]>(...keyCodes: T): T['length'] extends 1 ? boolean : boolean[] {
